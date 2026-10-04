@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аудиоредактор</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+<style>
+:root{--bg:#f6f6f4;--fg:#1d1d1b;--card:#fff;--bd:#d6d6d0;--ac:#2a6df4;--mut:#6b6b66;--wv:#2a6df4}
+@media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--card:#212121;--bd:#3a3a3a;--mut:#9a9a94}}
+*{box-sizing:border-box}
+body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif;max-width:760px;margin:auto}
+h1{font-size:20px;margin:4px 0 10px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
+.card h2{font-size:15px;margin:0 0 6px}
+button,select,input{font:inherit;color:inherit}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:7px 11px;margin:3px 3px 3px 0;cursor:pointer}
+button.g{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+button.on{outline:2px solid var(--ac)}
+input[type=number],select{background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:5px;width:90px}
+select{width:auto}
+canvas{width:100%;height:70px;background:var(--bg);border-radius:6px;display:block}
+.rg{position:relative;height:26px}
+.rg input{position:absolute;left:0;width:100%;pointer-events:none;-webkit-appearance:none;background:none;margin:0;top:3px}
+.rg input::-webkit-slider-thumb{pointer-events:auto;-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--ac);border:2px solid #fff}
+.rg input::-moz-range-thumb{pointer-events:auto;width:18px;height:18px;border-radius:50%;background:var(--ac)}
+.rg input::-webkit-slider-runnable-track{height:4px;background:var(--bd);border-radius:2px}
+.rg input+input::-webkit-slider-runnable-track{background:none}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0}
+.m{color:var(--mut);font-size:13px}
+#st{min-height:20px;font-size:14px}
+</style></head><body>
+<h1>Аудиоредактор</h1>
+<div class="card"><h2>Запись · общие настройки для обоих файлов</h2>
+<div class="row"><span class="m">Устройство:</span><select id="dv" style="max-width:100%"><option value="">По умолчанию</option></select><button class="g" id="dvr">Обновить список</button></div>
+<div class="row"><span class="m">Каналы:</span><select id="rch"><option value="1">моно</option><option value="2">стерео</option></select>
+<span class="m">частота, Гц:</span><select id="rsr"><option value="0">авто</option><option value="48000">48000</option><option value="44100">44100</option><option value="22050">22050</option></select></div>
+<div class="row"><label><input type="checkbox" id="rec_ec"> эхоподавление</label><label><input type="checkbox" id="rns"> шумоподавление</label><label><input type="checkbox" id="ragc"> автоусиление</label></div>
+<div class="row"><span class="m">Уровень:</span><div style="flex:1;min-width:80px;height:8px;background:var(--bd);border-radius:4px;overflow:hidden"><div id="lv" style="height:100%;width:0;background:var(--ac)"></div></div><span class="m" id="rt0">0.0 с</span></div>
+<div class="m">Кнопка «● Записать» есть в карточке каждого файла. Запись заменяет файл целиком. Для чистого сигнала все три галочки лучше выключить.</div></div>
+<div id="cards"></div>
+
+<div class="card"><h2>Режим</h2>
+<div class="row" id="tabs"></div>
+<div id="prm" class="row"></div>
+<div class="row"><button class="g" id="sm"></button><span class="m">стык, мс:</span><input type="number" id="smn" value="10" min="1" max="100"></div>
+<button id="go">Выполнить</button>
+</div>
+
+<div class="card"><h2>Результат <span class="m" id="rinfo">— пока нет</span></h2>
+<button id="rp" class="g">▶ Слушать результат</button>
+<button id="stop" class="g">■ Стоп</button>
+<button id="r2f" class="g">Результат → в Файл 1</button>
+<button id="sv">Сохранить…</button>
+</div>
+<div id="st"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const AC=window.AudioContext||window.webkitAudioContext;let ctx=null,src=null;
+const F={1:null,2:null};let R=null,mode='rev',smooth=true;
+const len=a=>a.ch[0].length, ms2s=(a,ms)=>Math.round(ms*a.sr/1000);
+const sl=(a,i,j)=>({sr:a.sr,ch:a.ch.map(c=>c.slice(i,j))});
+const say=t=>$('#st').textContent=t;
+function cat(p){const n=p.reduce((s,x)=>s+len(x),0),ch=p[0].ch.map(()=>new Float32Array(n));let o=0;p.forEach(x=>{x.ch.forEach((c,k)=>ch[k].set(c,o));o+=len(x)});return{sr:p[0].sr,ch}}
+function fit(a,sr,n){let ch=a.ch;if(a.sr!==sr){const r=sr/a.sr;ch=ch.map(c=>{const m=Math.round(c.length*r),o=new Float32Array(m);for(let i=0;i<m;i++){const x=i/r,k=Math.floor(x),f=x-k;o[i]=(c[k]||0)*(1-f)+(c[Math.min(k+1,c.length-1)]||0)*f}return o})}
+ const out=[];for(let k=0;k<n;k++)out.push(ch[Math.min(k,ch.length-1)]);return{sr,ch:out}}
+function rev(a){return{sr:a.sr,ch:a.ch.map(c=>{const n=c.length,o=new Float32Array(n);for(let i=0;i<n;i++)o[i]=c[n-1-i];return o})}}
+function fade(a,fi,fo,n){a.ch.forEach(c=>{const m=Math.min(n,c.length>>1);for(let i=0;i<m;i++){const g=i/m;if(fi)c[i]*=g;if(fo)c[c.length-1-i]*=g}})}
+function join(p){p=p.filter(x=>len(x));if(!p.length)return null;if(smooth){const n=ms2s(p[0],+$('#smn').value||0);p.forEach((x,i)=>fade(x,i>0,i<p.length-1,n))}return cat(p)}
+function frag(k){const f=F[k];return sl(f.a,ms2s(f.a,f.A),ms2s(f.a,f.B))}
+const bare=n=>n.replace(/\.[^.]+$/,'');
+
+/* ---------- карточки файлов ---------- */
+[1,2].forEach(k=>{$('#cards').insertAdjacentHTML('beforeend',`<div class="card"><h2>Файл ${k} ${k==1?'(основной)':'(вставляемый)'}</h2>
+<input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac" id="f${k}">
+<div class="m" id="i${k}">файл не загружен</div>
+<canvas id="c${k}" width="700" height="70"></canvas>
+<div class="rg"><input type="range" id="a${k}" min="0" max="1" step="1" value="0"><input type="range" id="b${k}" min="0" max="1" step="1" value="1"></div>
+<div class="row"><span class="m">выделено от, мс</span><input type="number" id="an${k}" min="0"><span class="m">до</span><input type="number" id="bn${k}" min="0">
+<button class="g" id="pl${k}">▶ Выделенное</button><button class="g" id="rec${k}">● Записать</button></div>
+<div class="row"><span class="m">слушать промежуток от, мс</span><input type="number" id="pa${k}" min="0" value="0"><span class="m">до</span><input type="number" id="pb${k}" min="0">
+<button class="g" id="pp${k}">▶</button></div></div>`);
+ $('#f'+k).onchange=e=>load(k,e.target.files[0]);
+ const sync=(src)=>{let A=+$('#a'+k).value,B=+$('#b'+k).value;if(src==='an')A=+$('#an'+k).value;if(src==='bn')B=+$('#bn'+k).value;setSel(k,A,B,src)};
+ $('#a'+k).oninput=()=>sync('a');$('#b'+k).oninput=()=>sync('b');
+ $('#an'+k).onchange=()=>sync('an');$('#bn'+k).onchange=()=>sync('bn');
+ $('#rec'+k).onclick=()=>rc?(rc.k==k?stopRec():say('Сейчас идёт запись в другой файл.')):startRec(k);
+ $('#pl'+k).onclick=()=>F[k]?play(frag(k)):say('Сначала загрузите файл '+k);
+ $('#pp'+k).onclick=()=>{const f=F[k];if(!f)return say('Сначала загрузите файл '+k);let x=+$('#pa'+k).value||0,y=+$('#pb'+k).value||f.dur;x=Math.max(0,Math.min(x,f.dur));y=Math.max(x,Math.min(y,f.dur));play(sl(f.a,ms2s(f.a,x),ms2s(f.a,y)))}});
+
+async function load(k,file){if(!file)return;ctx=ctx||new AC();say('Декодирую «'+file.name+'»…');
+ try{const buf=await ctx.decodeAudioData(await file.arrayBuffer());
+  const a={sr:buf.sampleRate,ch:[...Array(buf.numberOfChannels)].map((_,i)=>buf.getChannelData(i).slice())};
+  const ext=(file.name.split('.').pop()||'').toLowerCase();
+  setFile(k,a,bare(file.name),ext);say('Готово.')}
+ catch(e){say('Не удалось прочитать файл: этот формат браузер не поддерживает.')}}
+function setFile(k,a,name,fmt){const dur=Math.round(len(a)/a.sr*1000);const f=F[k]={a,name,fmt,dur,A:0,B:dur,pk:null};
+ ['a','b'].forEach(x=>$('#'+x+k).max=dur);['an','bn','pa','pb'].forEach(x=>$('#'+x+k).max=dur);
+ $('#pa'+k).value=0;$('#pb'+k).value=dur;
+ $('#i'+k).textContent=`${name}.${fmt} · ${(dur/1000).toFixed(2)} с · ${a.sr} Гц · ${a.ch.length==1?'моно':'каналов: '+a.ch.length}`;
+ const n=700,c=a.ch[0],st=Math.max(1,Math.floor(c.length/n));f.pk=[];for(let i=0;i<n;i++){let m=0;for(let j=i*st;j<Math.min(c.length,(i+1)*st);j++){const v=Math.abs(c[j]);if(v>m)m=v}f.pk.push(m)}
+ setSel(k,0,dur)}
+function setSel(k,A,B,src){const f=F[k];if(!f)return;A=Math.max(0,Math.min(Math.round(A),f.dur));B=Math.max(0,Math.min(Math.round(B),f.dur));
+ if(src==='a'||src==='an')A=Math.min(A,B);else if(src==='b'||src==='bn')B=Math.max(B,A);else if(A>B)[A,B]=[B,A];
+ f.A=A;f.B=B;$('#a'+k).value=A;$('#b'+k).value=B;$('#an'+k).value=A;$('#bn'+k).value=B;draw(k)}
+function draw(k){const f=F[k],cv=$('#c'+k),g=cv.getContext('2d'),W=cv.width,H=cv.height;g.clearRect(0,0,W,H);if(!f)return;
+ const st=getComputedStyle(document.body);g.fillStyle=st.color;g.globalAlpha=.25;g.fillRect(0,0,W,H);
+ g.globalAlpha=1;const x1=f.A/f.dur*W,x2=f.B/f.dur*W;g.fillStyle='#2a6df4';g.globalAlpha=.25;g.fillRect(x1,0,x2-x1,H);g.globalAlpha=1;
+ g.fillStyle='#2a6df4';f.pk.forEach((v,i)=>{const h=v*H*.95;g.fillRect(i,(H-h)/2,1,Math.max(1,h))})}
+
+/* ---------- воспроизведение ---------- */
+function stop(){if(src){try{src.stop()}catch(e){}src=null}}
+function play(a){if(!a||!len(a))return say('Нечего воспроизводить.');ctx=ctx||new AC();stop();if(ctx.state==='suspended')ctx.resume();
+ const b=ctx.createBuffer(a.ch.length,len(a),a.sr);a.ch.forEach((c,i)=>b.copyToChannel(c,i));
+ src=ctx.createBufferSource();src.buffer=b;src.connect(ctx.destination);src.start()}
+$('#stop').onclick=stop;
+
+/* ---------- запись ---------- */
+let rc=null;
+async function devs(){
+ try{const s=await navigator.mediaDevices.getUserMedia({audio:true});s.getTracks().forEach(t=>t.stop())}catch(e){say('Нет доступа к микрофону: разрешите его в браузере.')}
+ list()}
+async function list(){
+ try{const l=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput'),sel=$('#dv'),cur=sel.value;sel.innerHTML='';
+  const o0=new Option('По умолчанию','');sel.add(o0);l.forEach(d=>sel.add(new Option(d.label||'Устройство',d.deviceId)));sel.value=cur}catch(e){}}
+$('#dvr').onclick=devs;
+async function startRec(k){
+ if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return say('Запись недоступна в этом браузере.');
+ const nch=+$('#rch').value,sr=+$('#rsr').value;
+ const c={channelCount:nch,echoCancellation:$('#rec_ec').checked,noiseSuppression:$('#rns').checked,autoGainControl:$('#ragc').checked};
+ if($('#dv').value)c.deviceId={exact:$('#dv').value};
+ let ac;try{ac=sr?new AC({sampleRate:sr}):new AC()}catch(e){ac=new AC()}
+ try{ac.resume()}catch(e){}
+ let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:c})}catch(e){ac.close();return say('Не удалось начать запись ('+e.name+'): '+(e.name=='NotAllowedError'?'нет разрешения на микрофон. ':e.message+' ')+(location.protocol==='file:'?'Страница открыта как локальный файл, а браузеры часто блокируют микрофон для таких страниц. Выложите файл на GitHub Pages (https), как другие приложения.':''))}
+ if(ac.state==='suspended')ac.resume();
+ const s=ac.createMediaStreamSource(stream),n=ac.createScriptProcessor(4096,nch,nch),ch=[...Array(nch)].map(()=>[]),mute=ac.createGain();mute.gain.value=0;
+ n.onaudioprocess=e=>{let pk=0;const b=e.inputBuffer;for(let i=0;i<nch;i++){const d=b.getChannelData(Math.min(i,b.numberOfChannels-1));ch[i].push(d.slice());for(let j=0;j<d.length;j+=16)pk=Math.max(pk,Math.abs(d[j]))}$('#lv').style.width=Math.min(100,pk*100)+'%'};
+ s.connect(n);n.connect(mute);mute.connect(ac.destination);
+ rc={k,ac,stream,n,s,ch,t0:Date.now()};
+ rc.tm=setInterval(()=>$('#rt0').textContent=((Date.now()-rc.t0)/1000).toFixed(1)+' с',100);
+ $('#rec'+k).textContent='■ Стоп';say('Идёт запись в файл '+k+'… Нажмите «Стоп», чтобы закончить.');list()}
+function stopRec(){
+ if(!rc)return;const r=rc;rc=null;clearInterval(r.tm);r.n.onaudioprocess=null;r.n.disconnect();r.s.disconnect();r.stream.getTracks().forEach(t=>t.stop());
+ const sr=r.ac.sampleRate;r.ac.close();$('#rec'+r.k).textContent='● Записать';$('#lv').style.width='0';
+ const ch=r.ch.map(parts=>{const n=parts.reduce((s,x)=>s+x.length,0),o=new Float32Array(n);let q=0;parts.forEach(x=>{o.set(x,q);q+=x.length});return o});
+ if(!ch[0].length)return say('Запись пустая.');
+ const d=new Date(),z=n=>String(n).padStart(2,'0');
+ setFile(r.k,{sr,ch},`запись_${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}`,'wav');
+ say('Запись сохранена в файл '+r.k+'.')}
+
+/* ---------- режимы ---------- */
+const MODES={rev:'Реверс',over:'Замена',cut:'Разрез и вставка',rep:'Вырезать и заменить'};
+function tabs(){$('#tabs').innerHTML=Object.entries(MODES).map(([k,v])=>`<button class="g ${k==mode?'on':''}" data-m="${k}">${v}</button>`).join('');
+ $('#tabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{mode=b.dataset.m;tabs()});
+ const p=$('#prm'),pt='<span class="m">Время считается от начала выделенного фрагмента файла 1.</span><br>';
+ p.innerHTML=mode=='rev'?'<span class="m">Перевернуть:</span><select id="rt"><option value="1">выделенное в файле 1</option><option value="2">выделенное в файле 2</option><option value="3">результат целиком</option></select>'
+ :mode=='over'?pt+'<span class="m">Начать перезапись с, мс:</span><input type="number" id="p1" min="0" value="0"><span class="m">Фрагмент файла 2 заменит звук, общая длина не изменится.</span>'
+ :mode=='cut'?pt+'<span class="m">Разрезать в точке, мс:</span><input type="number" id="p1" min="0" value="0"><span class="m">Длина вырастет на длину вставки.</span>'
+ :pt+'<span class="m">Вырезать от, мс:</span><input type="number" id="p1" min="0" value="0"><span class="m">до</span><input type="number" id="p2" min="0" value="0">'}
+function smBtn(){$('#sm').textContent='Сглаживание стыков: '+(smooth?'вкл':'выкл');$('#sm').className=smooth?'':'g'}
+$('#sm').onclick=()=>{smooth=!smooth;smBtn()};smBtn();tabs();
+
+$('#go').onclick=()=>{try{
+ if(mode=='rev'){const t=$('#rt').value;
+  if(t=='3'){if(!R)return say('Результата пока нет.');R={...R,a:rev(R.a)}}
+  else{if(!F[t])return say('Загрузите файл '+t+'.');R={a:rev(frag(t)),name:F[t].name,n2:'',tag:'реверс',fmt:F[t].fmt}}}
+ else{if(!F[1]||!F[2])return say('Для вставки загрузите оба файла.');
+  const base=frag(1),ins=fit(frag(2),base.sr,base.ch.length),L=len(base);
+  const cl=v=>Math.max(0,Math.min(ms2s(base,+v||0),L));const t1=cl($('#p1').value);let parts;
+  if(mode=='over'){const e=Math.min(t1+len(ins),L);parts=[sl(base,0,t1),sl(ins,0,e-t1),sl(base,e)]}
+  else if(mode=='cut')parts=[sl(base,0,t1),sl(ins,0,len(ins)),sl(base,t1)];
+  else{let t2=cl($('#p2').value),a=t1,b=t2;if(b<a)[a,b]=[b,a];parts=[sl(base,0,a),sl(ins,0,len(ins)),sl(base,b)]}
+  const o=join(parts);if(!o)return say('Получился пустой результат.');
+  R={a:o,name:F[1].name,n2:F[2].name,tag:'',fmt:F[1].fmt}}
+ info();say('Готово. Можно прослушать результат или сохранить.')}catch(e){say('Ошибка: '+e.message)}};
+function info(){const d=len(R.a)/R.a.sr;$('#rinfo').textContent=`— ${d.toFixed(2)} с · ${R.a.sr} Гц · ${R.a.ch.length==1?'моно':'стерео'}`}
+$('#rp').onclick=()=>R?play(R.a):say('Результата пока нет.');
+$('#r2f').onclick=()=>{if(!R)return say('Результата пока нет.');setFile(1,R.a,R.name,R.fmt);say('Результат стал новым файлом 1.')};
+
+/* ---------- сохранение ---------- */
+function wav(a){const n=len(a),c=a.ch.length,b=new DataView(new ArrayBuffer(44+n*c*2)),w=(o,s)=>[...s].forEach((x,i)=>b.setUint8(o+i,x.charCodeAt(0)));
+ w(0,'RIFF');b.setUint32(4,36+n*c*2,true);w(8,'WAVEfmt ');b.setUint32(16,16,true);b.setUint16(20,1,true);b.setUint16(22,c,true);b.setUint32(24,a.sr,true);b.setUint32(28,a.sr*c*2,true);b.setUint16(32,c*2,true);b.setUint16(34,16,true);w(36,'data');b.setUint32(40,n*c*2,true);
+ let o=44;for(let i=0;i<n;i++)for(let k=0;k<c;k++){const s=Math.max(-1,Math.min(1,a.ch[k][i]));b.setInt16(o,s<0?s*32768:s*32767,true);o+=2}return new Blob([b],{type:'audio/wav'})}
+function mp3(a){const c=Math.min(2,a.ch.length),e=new lamejs.Mp3Encoder(c,a.sr,128),o=[],cv=x=>{const r=new Int16Array(x.length);for(let i=0;i<x.length;i++){const s=Math.max(-1,Math.min(1,x[i]));r[i]=s<0?s*32768:s*32767}return r},L=cv(a.ch[0]),Rr=c>1?cv(a.ch[1]):null;
+ for(let i=0;i<L.length;i+=1152){const d=c>1?e.encodeBuffer(L.subarray(i,i+1152),Rr.subarray(i,i+1152)):e.encodeBuffer(L.subarray(i,i+1152));if(d.length)o.push(d)}const f=e.flush();if(f.length)o.push(f);return new Blob(o,{type:'audio/mpeg'})}
+$('#sv').onclick=()=>{if(!R)return say('Результата пока нет.');
+ const d=new Date(),p=n=>String(n).padStart(2,'0'),stamp=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}`;
+ const def=`${R.name}_${R.n2||R.tag}_${stamp}`;let nm=prompt('Имя файла (без расширения):',def);if(nm===null)return;
+ nm=nm.trim().replace(/[\\/:*?"<>|]/g,'_')||def;let fmt=R.fmt,msg='';
+ if(fmt!=='mp3'&&fmt!=='wav'){msg=`Формат ${fmt.toUpperCase()} для сохранения не поддерживается, файл сохранён в WAV.`;fmt='wav'}
+ if(fmt==='mp3'&&!window.lamejs){msg='Кодировщик MP3 не загрузился (нужен интернет), файл сохранён в WAV.';fmt='wav'}
+ say('Кодирую…');setTimeout(()=>{const bl=fmt=='mp3'?mp3(R.a):wav(R.a),a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download=nm+'.'+fmt;document.body.appendChild(a);a.click();a.remove();say((msg?msg+' ':'')+'Сохранено: '+nm+'.'+fmt)},30)};
+</script></body></html>
